@@ -1,5 +1,9 @@
 # ansible-proxmox-vm-deploy
 
+Deploy a VM to Proxmox with ansible.
+
+This ansible roles assumes the usage of a Template that is CloudInit "ready".
+
 ```
 ansible-playbook -vv -i hosts/proxmox-local roles/proxmox/tasks/vm_deploy.yml site.yml \
        --tags vm_deploy -e "PVE_API=${PVE_API_HOST} PVE_USER=${PVE_USER} PVE_PASS=${PVE_PASS}" \
