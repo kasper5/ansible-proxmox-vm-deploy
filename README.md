@@ -8,7 +8,7 @@ This role does the following things:
 
 1. Create new VM in proxmox from a template.
 
-2. Allocate an IP address in Netbox (IPAM / DCIM).
+2. Allocate the supplied IP address in Netbox (IPAM / DCIM).
 
 3. Run the puppet agent on the new VM and sign the certificate request on the puppet master.
 
