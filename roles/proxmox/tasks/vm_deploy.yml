@@ -1,0 +1,260 @@
+---
+
+- name: Deploy VM.
+  hosts: localhost
+  connection: local
+  tasks:
+
+    # Authentication Proxmox API.
+    - name: Authentication Proxmox API.
+      uri:
+        url: "https://{{ PVE_API }}:8006/api2/json/access/ticket"
+        validate_certs: no
+        method: POST
+        body_format: form-urlencoded
+        body:
+          username: "{{ PVE_USER }}"
+          password: "{{ PVE_PASS }}"
+      tags:
+        - vm_deploy
+      register: auth
+
+    # update URL and token for your netbox instance.
+    - name: allocate ip address in netbox.
+      netbox_ip_address:
+        netbox_url: https://netbox.local
+        netbox_token: 9dc92025dc3ff60j4b437n92bm92bb7f2f0db039
+        validate_certs: no
+        data:
+          address: "{{ vm_ip }}"
+          description: "{{ VM_NAME }} (Created with Ansible)"
+        state: present
+      tags:
+        - vm_deploy
+
+    # Deploy VM.
+    - name: Deploy VM.
+      proxmox_kvm:
+        api_user: "{{ PVE_USER }}"
+        api_password: "{{ PVE_PASS }}"
+        api_host: "{{ PVE_API }}"
+        node: "{{ PVE_SRC_NODE }}"
+        target: "{{ PVE_DEST_NODE }}"
+        clone: "{{ PVE_TEMPLATE_NAME }}"
+        pool: "{{ VM_POOL }}"
+        full: yes
+        name: "{{ VM_NAME }}"
+        storage: "{{ VM_STORAGE }}"
+        format: "{{ VM_FORMAT }}"
+        timeout: 1000000
+      tags:
+        - vm_deploy
+
+    - name: Wait before continuing with updating configuration. Clone can take a while.
+      pause:
+        minutes: 2
+      tags:
+        - vm_deploy
+
+    # Get VMID.
+    - name: Get VMID.
+      proxmox_kvm:
+        api_user: "{{ PVE_USER }}"
+        api_password: "{{ PVE_PASS }}"
+        api_host: "{{ PVE_API }}"
+        node: "{{ PVE_DEST_NODE }}"
+        name: "{{ VM_NAME }}"
+        state: current
+      tags:
+        - vm_deploy
+      register: result
+
+    # Set VMID.
+    - name: Set fact VMID.
+      set_fact:
+        vmid: "{{ result.msg | regex_replace('.*vmid = ([1-9][0-9]{0,3}).*', '\\1') }}"
+      tags:
+        - vm_deploy
+
+    - name: Update configuration.
+      proxmox_kvm:
+        api_user: "{{ PVE_USER }}"
+        api_password: "{{ PVE_PASS }}"
+        api_host: "{{ PVE_API }}"
+        node: "{{ PVE_DEST_NODE }}"
+        name: "{{ VM_NAME }}"
+        memory: "{{ VM_MEM }}"
+        balloon: "{{ VM_MEM }}"
+        cores: "{{ VM_CPU }}"
+        update: yes
+      tags:
+        - vm_deploy
+
+    - name: Configure network interface.
+      uri:
+        url: "https://{{ PVE_API }}:8006/api2/json/nodes/{{ PVE_DEST_NODE }}/qemu/{{ vmid }}/config"
+        method: POST
+        validate_certs: no
+        headers:
+          Cookie: "PVEAuthCookie={{ auth.json.data.ticket }}"
+          CSRFPreventionToken: "{{ auth.json.data.CSRFPreventionToken }}"
+        body_format: form-urlencoded
+        body:
+          net0: "virtio,bridge={{ VM_BRIDGE }},firewall=1,tag={{ VM_VLAN }}"
+      tags:
+        - vm_deploy
+
+    - name: Configure IP settings.
+      uri:
+        url: "https://{{ PVE_API }}:8006/api2/json/nodes/{{ PVE_DEST_NODE }}/qemu/{{ vmid }}/config"
+        method: POST
+        validate_certs: no
+        headers:
+          Cookie: "PVEAuthCookie={{ auth.json.data.ticket }}"
+          CSRFPreventionToken: "{{ auth.json.data.CSRFPreventionToken }}"
+        body_format: form-urlencoded
+        body:
+          ipconfig0: "ip={{ vm_ip }}/{{ vm_cidr }},gw={{ vm_gateway }}"
+      tags:
+        - vm_deploy
+
+    - name: Configure DNS server setting.
+      uri:
+        url: "https://{{ PVE_API }}:8006/api2/json/nodes/{{ PVE_DEST_NODE }}/qemu/{{ vmid }}/config"
+        method: POST
+        validate_certs: no
+        headers:
+          Cookie: "PVEAuthCookie={{ auth.json.data.ticket }}"
+          CSRFPreventionToken: "{{ auth.json.data.CSRFPreventionToken }}"
+        body_format: form-urlencoded
+        body:
+          nameserver: "{{ vm_dns }}"
+      tags:
+        - vm_deploy
+
+    - name: Configure CloudInit Drive.
+      uri:
+        url: "https://{{ PVE_API }}:8006/api2/json/nodes/{{ PVE_DEST_NODE }}/qemu/{{ vmid }}/config"
+        method: POST
+        validate_certs: no
+        headers:
+          Cookie: "PVEAuthCookie={{ auth.json.data.ticket }}"
+          CSRFPreventionToken: "{{ auth.json.data.CSRFPreventionToken }}"
+        body_format: form-urlencoded
+        body:
+          ide2: "file={{ VM_STORAGE }}:cloudinit,size=4M,media=cdrom"
+      tags:
+        - vm_deploy
+
+    - name: Add disk to VM.
+      uri:
+        url: "https://{{ PVE_API }}:8006/api2/json/nodes/{{ PVE_DEST_NODE }}/qemu/{{ vmid }}/config"
+        method: POST
+        validate_certs: no
+        headers:
+          Cookie: "PVEAuthCookie={{ auth.json.data.ticket }}"
+          CSRFPreventionToken: "{{ auth.json.data.CSRFPreventionToken }}"
+        body_format: form-urlencoded
+        body:
+          scsi1: "file={{ VM_STORAGE }}:{{ second_disk_size }},format={{ VM_FORMAT }},iothread=1"
+      tags:
+        - vm_deploy
+
+    - name: Set description for VM.
+      uri:
+        url: "https://{{ PVE_API }}:8006/api2/json/nodes/{{ PVE_DEST_NODE }}/qemu/{{ vmid }}/config"
+        method: POST
+        validate_certs: no
+        headers:
+          Cookie: "PVEAuthCookie={{ auth.json.data.ticket }}"
+          CSRFPreventionToken: "{{ auth.json.data.CSRFPreventionToken }}"
+        body_format: form-urlencoded
+        body:
+          description: "{{ vm_desc }}"
+      tags:
+        - vm_deploy
+      when: vm_desc is defined
+
+    - name: Start VM.
+      proxmox_kvm:
+        validate_certs: no
+        api_user: "{{ PVE_USER }}"
+        api_password: "{{ PVE_PASS }}"
+        api_host: "{{ PVE_API }}"
+        node: "{{ PVE_DEST_NODE }}"
+        name: "{{ VM_NAME }}"
+        state: started
+      tags:
+        - vm_deploy
+
+    - name: Create host.
+      add_host:
+        name: "{{ vm_ip }}"
+        groups: launched
+        ansible_ssh_host: "{{ vm_ip }}"
+        ansible_user: centos
+        ansible_ssh_private_key_file: "{{ path_to_private_key }}"
+      tags:
+        - vm_deploy
+
+    - name: debug group launched.
+      debug: var=groups.launched
+      tags:
+        - vm_deploy
+
+- name: Post configuration.
+  hosts: launched,!localhost 
+  gather_facts: False
+  tasks:
+
+    - name: Wait for VM to become available.
+      wait_for_connection:
+        delay: 60
+        timeout: 300
+      tags:
+        - vm_deploy
+
+    - name: Ping new VM.
+      ping:
+      tags:
+        - vm_deploy
+
+    - name: Add puppet master IP to hosts file.
+      become: yes
+      lineinfile:
+        dest: /etc/hosts
+        line: "{{ puppetmaster }} puppet"
+        state: present
+      tags:
+        - vm_deploy
+
+    - name: 1st puppet run.
+      shell: /opt/puppetlabs/bin/puppet agent --test --debug --no-daemonize --waitforcert 0 >> /root/puppet_first_time.log 2>&1 || true
+      become: yes
+      changed_when: false
+      tags:
+        - vm_deploy
+
+    - name: wait for puppet agent to request a certificate
+      pause:
+        seconds: 60
+      tags:
+        - vm_deploy
+
+    - name: sign puppet certificate.
+      uri:
+        url: "https://{{ puppetmaster }}:8140/v1/certificate_status/{{ VM_NAME }}"
+        method: PUT
+        body: {"desired_state":"signed"}
+        body_format: json
+        status_code: 204
+        validate_certs: no
+      tags:
+        - vm_deploy
+
+    - name: 2nd puppet run after certificate signed.
+      shell: /usr/bin/nohup /opt/puppetlabs/bin/puppet agent --test --verbose --debug --no-daemonize --waitforcert 0 >> /root/puppet_second_time.log 2>&1 &
+      become: yes
+      changed_when: false
+      tags:
+        - vm_deploy

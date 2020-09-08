@@ -1,0 +1,7 @@
+---
+
+- name: Proxmox local operations.
+  hosts: proxmox-local
+  connection: local
+  roles:
+    - proxmox
